@@ -1,29 +1,30 @@
+const config = require('./utils/config')
 const express = require('express') // Express web server framework
 const cors = require('cors')
 const axios = require('axios')
+const mongoose = require('mongoose')
 const middleware = require('./utils/middleware')
 const logger = require('./utils/logger')
 require('express-async-errors')
-require('dotenv').config()
+const User = require('./models/user')
 
 const app = express()
+
+mongoose.connect(config.MONGODB_URI)
+    .then(() => {
+        logger.info('connected to MongoDB')
+    })
+    .catch((error) => {
+        logger.error('error connection to MongoDB:', error.message)
+    })
+
 app.use(cors())
 app.use(express.json())
 app.use(middleware.requestLogger)
 
 const client_id = '8f9a74e7f1e047f5b7bc91dd53752e5d' // Your client id
-const client_secret = process.env.CLIENT_SECRET // Your secret
+const client_secret = config.CLIENT_SECRET // Your secret
 const redirect_uri = 'http://localhost:3000' // Your redirect uri
-
-/*const generateRandomString = (length) => {
-    let text = ''
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  
-    for (let i = 0; i < length; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length))
-    }
-    return text
-}*/
 
 app.post('/login', async (req, res) => {
     const pageUrl = new URL(req.body.pageUrl)
@@ -54,6 +55,23 @@ app.post('/login', async (req, res) => {
             access_token: result.data.access_token,
             refresh_token: result.data.refresh_token
         })
+        const spotifyInfo = await axios.get('https://api.spotify.com/v1/me', {
+            headers: {
+                'Authorization': 'Bearer ' + result.data.access_token
+            }
+        })
+        const existingUser = await User.findById(spotifyInfo.data.id)
+        if (!existingUser) {
+            const user = new User({
+                _id: spotifyInfo.data.id,
+                accessToken: result.data.access_token,
+                seenUris: []
+            })
+            await user.save()
+        } else {
+            existingUser.accessToken = result.data.access_token
+            await existingUser.save()
+        }
     }
 })
 
@@ -104,7 +122,12 @@ app.post('/track', async (req,res) => {
             'Authorization': 'Bearer ' + access_token
         }
     })
-    const track = result.data.items[Math.floor(Math.random() * result.data.items.length)]
+    const user = await User.findOne({ accessToken: access_token })
+    const tracks = result.data.items.filter(track => user.seenUris.find(uri => uri === track.uri) === undefined)
+    console.log(tracks.length)
+    const track = tracks[Math.floor(Math.random() * tracks.length)]
+    user.seenUris.push(track.uri)
+    await user.save()
     res.send(track)
 })
 
@@ -124,6 +147,6 @@ app.post('/search', async (req,res) => {
 app.use(middleware.unknownEndpoint)
 app.use(middleware.errorHandler)
 
-app.listen(8888, () => {
+app.listen(config.PORT, () => {
     console.log('Listening on 8888')
 })
