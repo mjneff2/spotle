@@ -26,7 +26,7 @@ const client_id = '8f9a74e7f1e047f5b7bc91dd53752e5d' // Your client id
 const client_secret = config.CLIENT_SECRET // Your secret
 const redirect_uri = 'http://localhost:3000' // Your redirect uri
 
-app.post('/login', async (req, res) => {
+app.post('/api/login', async (req, res) => {
     const pageUrl = new URL(req.body.pageUrl)
     const params = pageUrl.searchParams
     console.log(params)
@@ -65,7 +65,7 @@ app.post('/login', async (req, res) => {
             const user = new User({
                 _id: spotifyInfo.data.id,
                 accessToken: result.data.access_token,
-                seenUris: []
+                plays: []
             })
             await user.save()
         } else {
@@ -75,7 +75,7 @@ app.post('/login', async (req, res) => {
     }
 })
 
-app.post('/loggedin', async (req, res) => {
+app.post('/api/user', async (req, res) => {
     const access_token = req.body.access_token
     const result = await axios.get('https://api.spotify.com/v1/me', {
         headers: {
@@ -85,30 +85,7 @@ app.post('/loggedin', async (req, res) => {
     return res.json(result.data)
 })
 
-app.get('/callback', async (req, res) => {
-    let code = req.query.code
-    let state = req.query.state
-    if (state !== null) {
-        const result = await axios.post('https://accounts.spotify.com/api/token',
-            new URLSearchParams({
-                grant_type: 'authorization_code',
-                code,
-                redirect_uri
-            }).toString()
-            , {
-                headers: {
-                    'Authorization': 'Basic ' + (Buffer.from(client_id + ':' + client_secret).toString('base64')),
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                }
-            })
-        res.json({
-            access_token: result.data.access_token,
-            refresh_token: result.data.refresh_token
-        })
-    }
-})
-
-app.post('/track', async (req,res) => {
+app.post('/api/track', async (req,res) => {
     const access_token = req.body.access_token
     if (access_token === null) {
         res.sendStatus(401)
@@ -123,15 +100,28 @@ app.post('/track', async (req,res) => {
         }
     })
     const user = await User.findOne({ accessToken: access_token })
-    const tracks = result.data.items.filter(track => user.seenUris.find(uri => uri === track.uri) === undefined)
+    const lastPlay = user.plays.length >= 1 ? user.plays[user.plays.length - 1] : null
+    const currentDate = new Date()
+    if (lastPlay && lastPlay.time.getDate() === currentDate.getDate()
+        && lastPlay.time.getMonth() === currentDate.getMonth()
+        && lastPlay.time.getFullYear() === currentDate.getFullYear()) {
+        const uri = lastPlay.uri.split(':')[2]
+        const trackResult = await axios.get(`https://api.spotify.com/v1/tracks/${uri}`, {
+            headers: {
+                'Authorization': 'Bearer ' + access_token
+            }
+        })
+        return res.send(trackResult.data)
+    }
+    const tracks = result.data.items.filter(track => user.plays.find(play => play.uri === track.uri) === undefined)
     console.log(tracks.length)
     const track = tracks[Math.floor(Math.random() * tracks.length)]
-    user.seenUris.push(track.uri)
+    user.plays.push({ time: Date.now(), uri: track.uri })
     await user.save()
     res.send(track)
 })
 
-app.post('/search', async (req,res) => {
+app.post('/api/search', async (req,res) => {
     const query = req.body.query
     const access_token = req.body.access_token
     const result = await axios.get('https://api.spotify.com/v1/search', {
